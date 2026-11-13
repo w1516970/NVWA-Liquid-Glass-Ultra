@@ -446,6 +446,7 @@ function track(el, kind) {
     if (items.has(el) || !trackable(el)) return;
     const it = { id: `ilg-f${++uid}`, kind, visible: true };
     items.set(el, it);
+    visibleItems.add(el);
     el.classList.add('ilg-glass');
     // 表面光泽只给不会内部滚动的表面，抽屉这类会滚的容器里光泽会跟着内容跑
     if (kind === 'bar' || kind === 'toast') el.classList.add('ilg-sheen');
@@ -471,6 +472,7 @@ function untrack(el) {
     el.style.backdropFilter = '';
     el.style.webkitBackdropFilter = '';
     if (it.posFixed) el.style.position = '';
+    visibleItems.delete(el);
     items.delete(el);
 }
 
@@ -487,6 +489,7 @@ function clearAll() {
     [...items.keys()].forEach(untrack);
     // 消息卡不在 items 里，单独扫一遍摘类
     document.getElementById('chat')?.querySelectorAll('.ilg-mes-css').forEach(el => el.classList.remove('ilg-mes-css', 'ilg-mes-refract'));
+    visibleItems.clear();
     cache.clear(); clearMaps();
 }
 
@@ -591,55 +594,78 @@ function syncFold() {
     foldIcon.setAttribute('aria-expanded', String(!foldMenu.hidden));
     foldBtn.classList.toggle('ilg-alert', apiAlert());
 }
+let foldTiles = [], foldRowHelp = null;
 function buildFoldTiles() {
-    foldMenu.replaceChildren();
-    // 第一行：整行宽的“聊天记录”，下面一行小标题，再下面才是设置图标宫格
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'ilg-fold-row';
-    row.setAttribute('role', 'menuitem');
-    row.innerHTML = '<span class="ilg-fold-row-icon" aria-hidden="true"></span><span class="ilg-fold-row-text"><b>聊天记录</b><small></small></span><span class="ilg-fold-row-chev" aria-hidden="true"></span>';
-    row.querySelector('small').textContent = homeOn ? '最近和谁聊过，点一下接着聊' : '回到首页，看看最近的聊天';
-    row.addEventListener('click', () => { closeFoldMenu(); showRecent(); });
-    const cap = document.createElement('div');
-    cap.className = 'ilg-fold-cap';
-    cap.setAttribute('role', 'presentation');
-    cap.textContent = '设置';
-    foldMenu.append(row, cap);
-    for (const d of foldedDrawers()) {
-        const toggle = d.querySelector(':scope > .drawer-toggle');
+    // 先读：把所有抽屉的实时状态收集齐，再一次性写 DOM。
+    // 原来每开一次菜单就 replaceChildren + 逐个 createElement + 逐个 getComputedStyle，
+    // 打开菜单和绘制玻璃叠在一起，手机上就是那一下的迟滞。
+    const next = foldedDrawers().flatMap(drawer => {
+        const toggle = drawer.querySelector(':scope > .drawer-toggle');
         const icon = toggle?.querySelector('.drawer-icon');
-        if (!icon || getComputedStyle(d).display === 'none') continue;
-        const tile = document.createElement('button');
-        tile.type = 'button';
-        tile.className = 'ilg-fold-tile';
-        tile.setAttribute('role', 'menuitem');
-        const glyph = document.createElement('span');
-        glyph.className = 'ilg-fold-glyph';
-        glyph.setAttribute('aria-hidden', 'true');
-        const mask = getComputedStyle(icon).getPropertyValue('--ilg-icon').trim();
-        if (S.icons && mask) glyph.style.setProperty('--ilg-icon', mask);
-        else glyph.classList.add('ilg-fa', ...[...icon.classList].filter(c => c.startsWith('fa')));
-        const label = document.createElement('span');
-        label.className = 'ilg-fold-label';
-        label.textContent = FOLD_LABELS[d.id] || icon.title || d.id;
-        tile.append(glyph, label);
-        tile.classList.toggle('ilg-alert', icon.classList.contains('redOverlayGlow'));
-        tile.classList.toggle('ilg-on', !!d.querySelector(':scope > .drawer-content.openDrawer'));
-        tile.addEventListener('click', () => {
-            closeFoldMenu();
-            toggle.click();
+        if (!icon || getComputedStyle(drawer).display === 'none') return [];
+        const mask = S.icons ? getComputedStyle(icon).getPropertyValue('--ilg-icon').trim() : '';
+        return [{
+            drawer, toggle, mask,
+            fa: [...icon.classList].filter(c => c.startsWith('fa')).join(' '),
+            label: FOLD_LABELS[drawer.id] || icon.title || drawer.id,
+            alert: icon.classList.contains('redOverlayGlow'),
+            open: !!drawer.querySelector(':scope > .drawer-content.openDrawer'),
+        }];
+    });
+    // 图标集合、图标字形、标题没变就只更新状态类，不重建节点
+    const changed = next.length !== foldTiles.length || !foldRowHelp || next.some((entry, i) =>
+        ['drawer', 'toggle', 'mask', 'fa', 'label'].some(key => entry[key] !== foldTiles[i][key]));
+    if (changed) {
+        const fragment = document.createDocumentFragment();
+        // 第一行：整行宽的“聊天记录”，下面一行小标题，再下面才是设置图标宫格
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'ilg-fold-row';
+        row.setAttribute('role', 'menuitem');
+        row.innerHTML = '<span class="ilg-fold-row-icon" aria-hidden="true"></span><span class="ilg-fold-row-text"><b>聊天记录</b><small></small></span><span class="ilg-fold-row-chev" aria-hidden="true"></span>';
+        foldRowHelp = row.querySelector('small');
+        row.addEventListener('click', () => { closeFoldMenu(); showRecent(); });
+        const cap = document.createElement('div');
+        cap.className = 'ilg-fold-cap';
+        cap.setAttribute('role', 'presentation');
+        cap.textContent = '设置';
+        fragment.append(row, cap);
+        foldTiles = next.map(entry => {
+            const { toggle, mask, fa, label: title } = entry;
+            const tile = document.createElement('button');
+            tile.type = 'button';
+            tile.className = 'ilg-fold-tile';
+            tile.setAttribute('role', 'menuitem');
+            const glyph = document.createElement('span');
+            glyph.className = 'ilg-fold-glyph';
+            glyph.setAttribute('aria-hidden', 'true');
+            if (mask) glyph.style.setProperty('--ilg-icon', mask);
+            else glyph.classList.add('ilg-fa', ...fa.split(' ').filter(Boolean));
+            const label = document.createElement('span');
+            label.className = 'ilg-fold-label';
+            label.textContent = title;
+            tile.append(glyph, label);
+            tile.addEventListener('click', () => { closeFoldMenu(); toggle.click(); });
+            fragment.appendChild(tile);
+            return { ...entry, tile };
         });
-        foldMenu.appendChild(tile);
+        foldMenu.replaceChildren(fragment);
     }
+    const help = homeOn ? '最近和谁聊过，点一下接着聊' : '回到首页，看看最近的聊天';
+    if (foldRowHelp.textContent !== help) foldRowHelp.textContent = help;
+    next.forEach((entry, i) => {
+        foldTiles[i].tile.classList.toggle('ilg-alert', entry.alert);
+        foldTiles[i].tile.classList.toggle('ilg-on', entry.open);
+    });
 }
 function openFoldMenu(viaKeyboard) {
-    buildFoldTiles();
     const r = foldIcon.getBoundingClientRect();
+    buildFoldTiles();
     foldMenu.style.top = `${r.bottom + 12}px`;
+    // 宽度由 CSS 变量决定，左右夹紧也写成 CSS clamp：打开时不再同步读 offsetWidth，
+    // 少一次强制布局，菜单和玻璃能同一帧出来
+    foldMenu.style.left = `clamp(8px, ${r.left - 6}px, max(8px, calc(100vw - var(--ilg-fold-menu-width) - 8px)))`;
     foldMenu.hidden = false;
-    const w = foldMenu.offsetWidth;
-    foldMenu.style.left = `${Math.max(8, Math.min(r.left - 6, innerWidth - w - 8))}px`;
     syncFold();
     if (viaKeyboard) foldMenu.querySelector('button')?.focus();
 }
@@ -849,6 +875,7 @@ function setHome(on) {
         if (wantRecent) { wantRecent = false; requestAnimationFrame(() => setRecent(true)); }
     } else {
         setRecent(false);
+        releaseRecent();
         chat.querySelectorAll(':scope > .ilg-home-hide').forEach(n => n.classList.remove('ilg-home-hide'));
     }
 }
@@ -864,9 +891,9 @@ new MutationObserver(muts => {
         if (homeOn) n.classList.add('ilg-home-hide');
     }
     // 置顶、改名、删除后酒馆会重画整个欢迎面板：聊天记录开着的话，给新面板补上标题栏和玻璃
-    if (recentOn) {
+    if (recentPanel) {
         const panel = welcomePanel();
-        if (panel && panel !== recentPanel) { untrack(recentPanel); mountRecent(panel); }
+        if (panel !== recentPanel) { releaseRecent(); if (recentOn && panel) mountRecent(panel); }
     }
     syncHome();
 }).observe(document.getElementById('chat'), { childList: true });
@@ -880,11 +907,28 @@ recentHead.className = 'ilg-recent-head';
 recentHead.innerHTML = '<h2 class="ilg-recent-title" id="ilg-recent-title">聊天记录</h2>' +
     '<button type="button" class="ilg-recent-close" title="关闭" aria-label="关闭聊天记录"></button>';
 recentHead.querySelector('.ilg-recent-close').addEventListener('click', () => setRecent(false, true));
+let recentAttrs = null;
+function releaseRecent() {
+    if (!recentPanel) return;
+    untrack(recentPanel);
+    recentPanel.classList.remove('ilg-recent');
+    // 宿主属性原样还回去，别把我们加的 role / aria 留在人家的欢迎面板上
+    for (const [name, value] of recentAttrs) {
+        if (value === null) recentPanel.removeAttribute(name);
+        else recentPanel.setAttribute(name, value);
+    }
+    recentHead.remove();
+    recentPanel = recentAttrs = null;
+}
 function mountRecent(panel) {
+    if (panel === recentPanel) return;
+    releaseRecent();
     recentPanel = panel;
+    recentAttrs = ['role', 'aria-labelledby', 'aria-hidden'].map(name => [name, panel.getAttribute(name)]);
     panel.classList.add('ilg-recent');
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-labelledby', 'ilg-recent-title');
+    panel.setAttribute('aria-hidden', String(!recentOn));
     if (recentHead.parentElement !== panel) panel.prepend(recentHead);
     track(panel, 'panel');
 }
@@ -893,21 +937,17 @@ function setRecent(on, refocus) {
     on = on && homeOn && !!panel;
     if (on === recentOn) return;
     recentOn = on;
+    // 打开时挂一次玻璃；关闭只把面板藏起来，不拆滤镜。
+    // 反复“看一下记录再回来”时，省掉每次 untrack + track + 重建滤镜的那一下。
+    if (on) mountRecent(panel);
     root.classList.toggle('ilg-recent-open', on);
     recentBtn.setAttribute('aria-expanded', String(on));
+    if (recentPanel) recentPanel.setAttribute('aria-hidden', String(!on));
     if (on) {
         closeFoldMenu();
-        mountRecent(panel);
         panel.scrollTop = 0;
         (panel.querySelector('.recentChat:not(.hidden)') || recentHead.querySelector('button')).focus({ preventScroll: true });
-    } else if (recentPanel) {
-        untrack(recentPanel);
-        recentPanel.classList.remove('ilg-recent');
-        recentPanel.removeAttribute('role');
-        recentHead.remove();
-        recentPanel = null;
-        if (refocus && homeOn) recentBtn.focus();
-    }
+    } else if (refocus && homeOn) recentBtn.focus();
 }
 // 在聊天里点“聊天记录”：先关掉当前聊天（酒馆会自动保存，回到欢迎页），首页出现后自动展开列表
 function showRecent() {
@@ -932,7 +972,7 @@ new ResizeObserver(() => requestAnimationFrame(layoutIslands)).observe(holder);
 window.addEventListener('resize', () => requestAnimationFrame(layoutIslands));
 
 // 明暗判定：浅色壁纸配白字会看不清，所以按壁纸平均亮度切换
-let lightBg = false;
+let lightBg = false, cardTone = null;
 function sampleLuminance(url) {
     return new Promise(resolve => {
         const img = new Image();
@@ -1004,13 +1044,49 @@ async function applyTone() {
     if (st) st.textContent = statusText();
     scheduleAdaptNow();
     // 深浅一换，正文里卡片小面板的“反色”判断要重来（推到下一拍：模块初始化时这里会先于 queueCards 那段代码执行）
-    setTimeout(() => queueCards(true));
+    // 只有明暗真的变了才重扫全文：applyTone 会被壁纸、跟随时间、设置变更反复调用，
+    // 每次都对整个聊天做一遍 tagCard 是长聊里最冤的开销。
+    const nextCardTone = S.enabled ? (lightBg ? 'light' : 'dark') : null;
+    if (nextCardTone !== cardTone) {
+        cardTone = nextCardTone;
+        if (S.enabled) setTimeout(() => queueCards(true));
+    }
     followTone();
 }
 setInterval(followTone, 60000);
 sysDark.addEventListener('change', followTone);
 
+/* 外观参数的“轻量应用”：只改变量 + 重画可见玻璃，不 clearAll、不 scan。
+   原来拖动任意滑块都走 applyRoot() → scan() 全聊天 + 每条玻璃重建滤镜，
+   一帧里几十条滤镜链重算，滑块自然发涩。参数只影响材质，不影响“哪些元素是玻璃”，
+   所以根本不需要重新扫描 DOM。 */
+function applySurfaceSettings() {
+    root.style.setProperty('--ilg-hl', S.highlight);
+    root.style.setProperty('--ilg-radius', `${S.radius}px`);
+    root.style.setProperty('--ilg-shadow-k', S.pShadow);
+    root.style.setProperty('--ilg-sheen-k', S.pSheen);
+    root.style.setProperty('--ilg-mes-a', S.mesTint);
+    root.style.setProperty('--ilg-scrim-a', S.scrim);
+}
+const visibleItems = new Set();
+let glassSettingsRaf = 0;
+function repaintVisible() {
+    // 消息卡是纯 CSS，不需要重画；这里只处理顶栏 / 输入框 / 弹窗这类带 SVG 滤镜的表面
+    for (const el of visibleItems) if (items.has(el)) paint(el);
+}
+function queueGlassSettings() {
+    if (!S.enabled || glassSettingsRaf) return;
+    glassSettingsRaf = requestAnimationFrame(() => {
+        glassSettingsRaf = 0;
+        if (!S.enabled) return;
+        applySurfaceSettings();
+        repaintVisible();
+    });
+}
+
 function applyRoot() {
+    if (glassSettingsRaf) { cancelAnimationFrame(glassSettingsRaf); glassSettingsRaf = 0; }
+    if (!S.enabled) cardTone = null;
     root.classList.toggle('ilg', S.enabled);
     // 消息卡走纯 CSS 玻璃（不建 SVG 滤镜）的总开关，CSS 全靠这个类
     root.classList.toggle('ilg-mes-css', S.enabled);
@@ -1024,12 +1100,7 @@ function applyRoot() {
     root.classList.toggle('ilg-avline', S.enabled && S.avatar === 'line');
     root.classList.toggle('ilg-orb-on', S.enabled && S.orb);
     applyTone();
-    root.style.setProperty('--ilg-hl', S.highlight);
-    root.style.setProperty('--ilg-radius', `${S.radius}px`);
-    root.style.setProperty('--ilg-shadow-k', S.pShadow);
-    root.style.setProperty('--ilg-sheen-k', S.pSheen);
-    root.style.setProperty('--ilg-mes-a', S.mesTint);
-    root.style.setProperty('--ilg-scrim-a', S.scrim);
+    applySurfaceSettings();
     applyToneBtn();
     applyFold();
     applyQrFold();
@@ -1060,7 +1131,8 @@ const cardClarity = createCardTextClarity(chatEl);
 new ResizeObserver(() => {
     const atBottom = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 40;
     root.style.setProperty('--ilg-form-h', `${form.offsetHeight}px`);
-    if (atBottom) chatEl.scrollTop = chatEl.scrollHeight;
+    // 用户关了“自动滚到底”就别抢滚动位置；扩展没开也不用管
+    if (S.enabled && ctx.powerUserSettings?.auto_scroll_chat_to_bottom && atBottom) chatEl.scrollTop = chatEl.scrollHeight;
 }).observe(form);
 
 // 新消息、删除消息、切换聊天
@@ -1083,12 +1155,17 @@ new MutationObserver(muts => {
     }
 }).observe(chatEl, { childList: true });
 
-// 弹窗是动态插入 body 的；body 的 class 变化代表切换了气泡模式 / 关闭模糊
+// 弹窗是动态插入 body 的；只有“气泡模式”真的变了才需要重扫消息，
+// 其余 body class 变化（no-blur、reduced-motion、movingUI 等）只影响已有玻璃的绘制，重画可见的即可。
+let bodyBubbleMode = document.body.classList.contains('bubblechat');
 new MutationObserver(muts => {
+    const bubble = document.body.classList.contains('bubblechat');
+    const bubbleChanged = bubble !== bodyBubbleMode;
+    bodyBubbleMode = bubble;
     if (!S.enabled) return;
-    let rescan = false;
+    let changed = false;
     for (const m of muts) {
-        if (m.type === 'attributes') rescan = true;
+        if (m.type === 'attributes') changed = true;
         m.addedNodes.forEach(n => {
             if (n.nodeType !== 1) return;
             if (n.matches?.(PANEL_SEL)) track(n, 'panel');
@@ -1100,7 +1177,10 @@ new MutationObserver(muts => {
             n.querySelectorAll?.('.ilg-glass, .ilg-mes-css').forEach(untrack);
         });
     }
-    if (rescan) { scan(); repaintAll(); }
+    if (changed) {
+        if (bubbleChanged) scan();
+        repaintVisible();
+    }
 }).observe(document.body, { childList: true, attributes: true, attributeFilter: ['class'] });
 // 第三方弹窗不参与扫描：这里只监听酒馆核心弹窗和本扩展自己的宿主节点。
 function fmt(step, unit, v) {
@@ -1342,7 +1422,7 @@ function buildPanel() {
     });
     document.getElementById('ilg-opt-profile').addEventListener('change', e => {
         S.profile = e.target.value;
-        applyRoot(); sync(); ctx.saveSettingsDebounced();
+        queueGlassSettings(); sync(); ctx.saveSettingsDebounced();
     });
     document.getElementById('ilg-opt-homeName').addEventListener('input', e => {
         S.homeName = e.target.value;
@@ -1350,11 +1430,11 @@ function buildPanel() {
     });
     document.getElementById('ilg-opt-follow').addEventListener('change', e => {
         S.follow = e.target.checked;
-        applyRoot(); ctx.saveSettingsDebounced();
+        queueGlassSettings(); ctx.saveSettingsDebounced();
     });
     wrap.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => {
         Object.assign(S, PRESETS[b.dataset.preset][1]);
-        applyRoot(); sync(); ctx.saveSettingsDebounced();
+        queueGlassSettings(); sync(); markPresets(); ctx.saveSettingsDebounced();
     }));
     TOGGLES.forEach(([k]) => document.getElementById(`ilg-opt-${k}`).addEventListener('change', e => {
         if (k === 'iosSvgTrial' && !iosSvgEligible) { e.target.checked = !!S[k]; return; }
@@ -1370,7 +1450,7 @@ function buildPanel() {
     SLIDERS.forEach(([k, , , , step, unit]) => document.getElementById(`ilg-opt-${k}`).addEventListener('input', e => {
         S[k] = parseFloat(e.target.value);
         document.getElementById(`ilg-opt-${k}-v`).textContent = fmt(step, unit, S[k]);
-        applyRoot(); markPresets(); ctx.saveSettingsDebounced();
+        queueGlassSettings(); markPresets(); ctx.saveSettingsDebounced();
     }));
     const reset = () => {
         // 只重置本扩展的外观参数，保留原主题备份和首次清理记录。
@@ -1430,8 +1510,8 @@ function lumAt(x, y, bar) {
     }
     return null;
 }
-function adaptBar(bar) {
-    if (!bar || bar.hidden) return false;
+function sampleBar(bar) {
+    if (!bar || bar.hidden) return null;
     const r = bar.getBoundingClientRect();
     const ys = [r.top + r.height * 0.4, r.top + r.height * 0.75];
     let sum = 0, n = 0;
@@ -1441,9 +1521,8 @@ function adaptBar(bar) {
         if (l !== null) { sum += l; n++; }
     }
     const avg = n ? sum / n : null;
-    bar.classList.toggle('ilg-over-light', !lightBg && avg !== null && avg > 0.62);
-    bar.classList.toggle('ilg-over-dark', lightBg && avg !== null && avg < 0.38);
-    return bar.classList.contains('ilg-over-light');
+    // 先只算不写：所有表面采样完再统一改 class，避免“读 → 写 → 再读”夹在滚动里强制重排
+    return { bar, light: !lightBg && avg !== null && avg > 0.62, dark: lightBg && avg !== null && avg < 0.38 };
 }
 // 滚动中完全不采样，停手 150ms 后跑一次；滚动期间沿用上一次的结论
 let adaptRaf = 0, adaptTimer = 0, adaptDirty = false;
@@ -1451,16 +1530,17 @@ function runAdapt() {
     adaptRaf = 0;
     adaptDirty = false;
     if (!S.enabled) return;
-    if (S.islands && islands.length) {
-        // 每座岛各自判断；岛下面是浅色内容时，它那几个图标加深阴影
-        islands.forEach(isl => {
-            const over = adaptBar(isl);
-            (isl.icons || []).forEach(d => d.classList.toggle('ilg-icon-over-light', over));
+    const bars = S.islands && islands.length ? islands : [document.getElementById('top-bar')];
+    const samples = [...bars, document.querySelector(PILL_SEL)].map(sampleBar);
+    for (const sample of samples) {
+        if (!sample) continue;
+        const { bar, light, dark } = sample;
+        if (bar.classList.contains('ilg-over-light') !== light) bar.classList.toggle('ilg-over-light', light);
+        if (bar.classList.contains('ilg-over-dark') !== dark) bar.classList.toggle('ilg-over-dark', dark);
+        (bar.icons || []).forEach(d => {
+            if (d.classList.contains('ilg-icon-over-light') !== light) d.classList.toggle('ilg-icon-over-light', light);
         });
-    } else {
-        adaptBar(document.getElementById('top-bar'));
     }
-    adaptBar(document.querySelector(PILL_SEL));
 }
 function scheduleAdapt() {
     if (!S.enabled) return;
@@ -1508,10 +1588,17 @@ function flashFloor() {
     clearTimeout(floorHide);
     floorHide = setTimeout(() => floorChip.classList.remove('is-on'), 1600);
 }
+let floorMessages = [], floorDirty = true;
 function visibleFloor() {
     const bar = document.getElementById('top-bar');
     const chat = document.getElementById('chat');
-    const mes = chat ? chat.querySelectorAll('.mes[mesid]') : [];
+    // 节点列表缓存：滚动停止后才算一次楼层，但每算一次都 querySelectorAll 全聊天也够呛。
+    // 增删消息、切聊天、mesid 变化时才重建列表。
+    if (floorDirty) {
+        floorMessages = chat ? [...chat.querySelectorAll('.mes[mesid]')] : [];
+        floorDirty = false;
+    }
+    const mes = floorMessages;
     if (!mes.length) return null;
     const last = Number(mes[mes.length - 1].getAttribute('mesid'));
     // 已经滚到底：直接显示最后一楼，别显示屏幕顶上那条（读到底的人想知道的是「现在到第几楼」）
@@ -1552,7 +1639,11 @@ function scheduleFloorSoon() {
 }
 // 滚动时才亮出来（1.6 秒后自己淡下去）：常驻会正好压在消息头上那行名字和日期上
 chatEl.addEventListener('scroll', () => { scheduleFloorSoon(); flashFloor(); }, { passive: true });
-new MutationObserver(scheduleFloor).observe(chatEl, { childList: true, subtree: true });
+new MutationObserver(muts => {
+    if (muts.some(m => m.type === 'attributes' || m.target === chatEl ||
+        [...m.addedNodes, ...m.removedNodes].some(n => n.nodeType === 1 && (n.matches('.mes') || n.querySelector?.('.mes'))))) floorDirty = true;
+    scheduleFloor();
+}).observe(chatEl, { childList: true, subtree: true, attributes: true, attributeFilter: ['mesid'] });
 window.addEventListener('resize', scheduleFloor);
 scheduleFloor();
 
@@ -1695,10 +1786,14 @@ function tagCard(text) {
     const light = root.classList.contains('ilg-light');
     let fixedOverlay = false, cardRenderer = false;
     const walk = (el, base, depth) => {
+        // 先读后写：这一层的样式全部读完，再统一改 class，最后才递归子节点。
+        // 边读边写会让父节点刚加的类影响子节点后续的 getComputedStyle，浏览器要反复重算样式；
+        // 分两趟之后整棵子树只算一次。
+        const updates = [];
         for (const k of el.children) {
             // 深度 4 以下不再往下看：真实角色卡的“反色底小面板”都在这几层里，
             // 再深就是正文本身（p / span / em），给它们逐个 getComputedStyle 纯属浪费。
-            if (depth > 4) return;
+            if (depth > 4) break;
             const tag = k.tagName;
             if (tag === 'IFRAME') {
                 const cs = getComputedStyle(k);
@@ -1711,26 +1806,29 @@ function tagCard(text) {
             // 纯文本/内联标签没有底色，直接跳过（原来会给每一个 em/i/b 都查一次样式）
             if (INLINE_TAGS.test(tag)) continue;
             const cs = getComputedStyle(k);
-            if (cs.position === 'fixed' && cs.display !== 'none' && cs.visibility !== 'hidden' && k.getClientRects().length) fixedOverlay = true;
+            const shown = cs.display !== 'none' && cs.visibility !== 'hidden';
+            if (cs.position === 'fixed' && shown && k.getClientRects().length) fixedOverlay = true;
             const c = blockBg(k, cs);
             // backgroundImage 只在真有可能是渐变时才看：绝大多数节点是 none，字符串检查比解析便宜
             const hasImg = cs.backgroundImage !== 'none';
             const panel = PANEL_TAGS.test(tag) || k.getAttribute('role') !== null;
             const choice = CHOICE_TAGS.test(tag) || k.getAttribute('role') === 'button' || k.getAttribute('role') === 'option';
             const surface = choice || (panel && (!!c || hasImg || cs.position === 'fixed'));
-            if (surface || c) {
-                k.classList.toggle('ilg-card-surface', surface);
-                if (surface && cs.display !== 'none' && cs.visibility !== 'hidden' && k.getClientRects().length) cardRenderer = true;
-            }
+            if (surface && shown && k.getClientRects().length) cardRenderer = true;
 
             let lum = base;
             if (c) lum = lumOf(c) * c.a + base * (1 - c.a);
-            if (c) {
-                k.classList.toggle('ilg-lit', lum > 0.62 && !light);
-                k.classList.toggle('ilg-dim', lum < 0.38 && light);
-            }
-            if (k.children.length) walk(k, lum, depth + 1);
+            updates.push({ element: k, surface, lit: !!c && lum > 0.62 && !light, dim: !!c && lum < 0.38 && light, lum });
         }
+        const apply = (node, cls, want) => {
+            if (node.classList.contains(cls) !== want) node.classList.toggle(cls, want);
+        };
+        for (const u of updates) {
+            apply(u.element, 'ilg-card-surface', u.surface);
+            apply(u.element, 'ilg-lit', u.lit);
+            apply(u.element, 'ilg-dim', u.dim);
+        }
+        for (const u of updates) if (u.element.children.length) walk(u.element, u.lum, depth + 1);
     };
     walk(text, light ? 0.95 : 0.08, 1);
     const message = text.closest('.mes');
@@ -1745,6 +1843,7 @@ const INLINE_TAGS = /^(EM|I|B|STRONG|BR|Q|SPAN|A|U|S|SMALL|CODE|SUB|SUP|MARK|CIT
 const PANEL_TAGS = /^(DIV|SECTION|ARTICLE|ASIDE|DETAILS|SUMMARY|DIALOG|BUTTON|BLOCKQUOTE|FIGURE|TABLE|UL|OL|LI|HEADER|FOOTER|NAV|FORM|PRE)$/;
 const CHOICE_TAGS = /^(BUTTON|SELECT|OPTION|INPUT)$/;
 function queueCards(all) {
+    if (!S.enabled) { clearTimeout(cardTimer); cardDirty.clear(); return; }
     if (all) chatEl.querySelectorAll('.mes_text').forEach(t => cardDirty.add(t));
     clearTimeout(cardTimer);
     cardTimer = setTimeout(() => {
