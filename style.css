@@ -765,12 +765,13 @@ html.ilg.ilg-fold body :is(#ilg-fold-button.ilg-alert .ilg-fold-icon, .ilg-fold-
 
 /* 弹出的玻璃菜单：四列图标 + 文字 */
 /* position 写在隐藏状态上也要生效：挂玻璃时会读 position，读到 static 就会被改成 relative */
-#ilg-fold-menu { display: none; position: fixed; z-index: 3010; }
+#ilg-fold-menu { --ilg-fold-menu-width: 336px; display: none; position: fixed; z-index: 3010; }
 html.ilg.ilg-fold body #ilg-fold-menu:not([hidden]) {
     display: grid;
     grid-template-columns: repeat(4, 76px);
     gap: 4px;
     padding: 10px;
+    width: min(var(--ilg-fold-menu-width), calc(100vw - 16px));
     border-radius: 24px;
     max-width: calc(100vw - 16px);
     color: var(--SmartThemeBodyColor);
@@ -781,7 +782,7 @@ html.ilg.ilg-fold body #ilg-fold-menu:not([hidden]) {
 }
 html.ilg.ilg-fold.ilg-light body #ilg-fold-menu:not([hidden]) { background-color: rgba(255, 255, 255, 0.88); }
 @media screen and (max-width: 360px) {
-    html.ilg.ilg-fold body #ilg-fold-menu:not([hidden]) { grid-template-columns: repeat(4, 1fr); width: calc(100vw - 16px); }
+    html.ilg.ilg-fold body #ilg-fold-menu:not([hidden]) { --ilg-fold-menu-width: calc(100vw - 16px); grid-template-columns: repeat(4, 1fr); width: var(--ilg-fold-menu-width); }
 }
 /* 独立挂在 body 的自有菜单也必须自带明暗文字，不能继承主题中的白字和文字阴影。 */
 html.ilg body #ilg-fold-menu {
@@ -1197,7 +1198,8 @@ html.ilg:not(.ilg-light) body #ilg-fold-menu .ilg-fold-tile { text-shadow: none;
 html.ilg body #ilg-fold-menu .ilg-fold-label { font-size: 12.5px; letter-spacing: 0.02em; white-space: nowrap; }
 /* 电脑上菜单宽一点，图标格子大一点 */
 @media screen and (min-width: 1001px) {
-    html.ilg.ilg-fold body #ilg-fold-menu:not([hidden]) { grid-template-columns: repeat(4, 86px); gap: 6px; padding: 12px; }
+    /* 宽度变量必须和实际列宽一致：4×86 + 3×6 + 2×12 = 386。定位用这个值做右边界夹紧。 */
+    html.ilg.ilg-fold body #ilg-fold-menu:not([hidden]) { --ilg-fold-menu-width: 386px; grid-template-columns: repeat(4, 86px); gap: 6px; padding: 12px; }
     html.ilg body #ilg-fold-menu .ilg-fold-label { font-size: 13px; }
 }
 
