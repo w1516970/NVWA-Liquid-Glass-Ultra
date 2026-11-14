@@ -3498,6 +3498,15 @@ html.ilg body.bubblechat #chat .mes.ilg-mes-css {
     contain: layout style paint;
 }
 
+/* 卡片内部有同文档 fixed 浮层（角色卡弹窗）或 iframe 时，必须放弃 containment：
+   contain 会把它变成 fixed 后代的包含块并裁剪溢出，弹窗就会跑位或被切掉。
+   tagCard 会给这类卡片挂 ilg-content-overlay / ilg-card-renderer，这里据此让路。 */
+html.ilg body.bubblechat #chat .mes.ilg-mes-css.ilg-content-overlay,
+html.ilg body.bubblechat #chat .mes.ilg-mes-css.ilg-card-renderer {
+    contain: none;
+    overflow: visible;
+}
+
 /* 用户自己的消息：底色略不同，跟原版一致 */
 html.ilg body.bubblechat #chat .mes.ilg-mes-css[is_user="true"] {
     background: var(--SmartThemeUserMesBlurTintColor, rgba(24, 28, 38, 0.44));
@@ -3571,14 +3580,14 @@ html.ilg body.bubblechat #chat .mes.ilg-mes-css.ilg-mes-refract {
                 0 2px 10px rgba(var(--ilg-drop-rgb, 0, 0, 0), 0.16);
 }
 
-/* ---------- 5. 长聊天：离屏卡片完全停掉合成 ----------
-   content-visibility: auto 让浏览器跳过屏幕外卡片的渲染与布局。
-   注意：v1 不敢用是因为 SVG 滤镜会被裁掉；v2 卡片没有滤镜，可以放心开。
-   配合 contain-intrinsic-size 防止滚动条跳动。 */
-html.ilg body.bubblechat #chat .mes.ilg-mes-css {
-    content-visibility: auto;
-    contain-intrinsic-size: auto 220px;
-}
+/* ---------- 5. 不要给消息卡加 content-visibility ----------
+   2.0 曾经用过 content-visibility: auto + contain-intrinsic-size: auto 220px，
+   想跳过离屏卡片的渲染。实测会破坏打开聊天时的定位：
+   离屏卡片先按 220px 估算高度，而真实消息普遍更高，滚动条总高度被低估；
+   酒馆加载后执行 scrollTop = scrollHeight 贴底，卡片进入视口后高度补齐，
+   滚动位置却留在原处 —— 表现为“打开聊天后停在往前十来楼的位置”，
+   手动再拉一次到底才正常。（2026-11-14 实测：40 条消息偏 3537px，约 10 楼）
+   卡片本来就没有 SVG 滤镜，跳过渲染省下的只是绘制，不值得用定位错误换。 */
 
 /* ---------- 6. 尊重系统“减少动画” ---------- */
 @media (prefers-reduced-motion: reduce) {
