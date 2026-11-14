@@ -1,5 +1,19 @@
 # 更新日志
 
+## 1.5.2-ultra3（2026-11-14）
+
+修复：打开聊天后滚动位置停在往前十来楼，而不是最后一条。
+
+原因是我们给消息卡加的 `content-visibility: auto` + `contain-intrinsic-size: auto 220px`。
+离屏卡片按 220px 估算高度，而真实消息普遍更高，滚动条总高度被低估；酒馆加载后执行
+`scrollTop = scrollHeight` 贴底，卡片进入视口高度补齐，滚动位置却留在原处。
+实测 40 条消息偏 3848px（约 10 楼），手动再拉一次到底才正常。
+
+- 移除消息卡上的 `content-visibility` / `contain-intrinsic-size`
+- 卡片带同文档 fixed 浮层（角色卡弹窗）或 iframe 时放弃 containment，避免弹窗跑位或被裁
+- 滚动帧耗时无变化（中位 42.1ms vs 42.1ms），这项优化本来收益就很小
+- manifest 的 homePage 改为本仓库，扩展管理器的链接不再指向上游
+
 ## 1.5.1-ultra2（2026-11-13）
 
 同步上游 1.4.3 的性能修复（我们的基线是 1.4.2，这部分此前缺失），并针对 Ultra 的纯 CSS 架构重做：
